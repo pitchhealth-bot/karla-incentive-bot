@@ -1,0 +1,17 @@
+{
+  "name": "karla-incentive-bot",
+  "version": "1.0.0",
+  "description": "Discord incentive approvals bot (Airtable + Render)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": "18.x"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "express": "^4.19.2"
+  }
+}
