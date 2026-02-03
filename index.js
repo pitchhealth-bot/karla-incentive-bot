@@ -4,6 +4,7 @@
  * ✅ Airtable automation -> POST /send-incentive { recordId }
  * ✅ Bot posts embed with buttons: Approve / Deny
  * ✅ Clicking buttons updates Airtable field "Approval Status"
+ * ✅ Uses Lookup field "Agent Name Text" to display name
  *
  * Env Vars (Render):
  *  DISCORD_BOT_TOKEN
@@ -58,9 +59,12 @@ reqEnv("AIRTABLE_BASE_ID");
 reqEnv("AIRTABLE_TABLE_NAME");
 reqEnv("WEBHOOK_SECRET");
 
-// ===== Airtable config (YOUR FIELD NAMES) =====
+// ===== Airtable field names (MUST match your table) =====
 const FIELD_DATE = "Date";
-const FIELD_AGENT_NAME = "Agent Name";
+
+// IMPORTANT: Agent Name is a linked record, so we use a LOOKUP field:
+const FIELD_AGENT_NAME_TEXT = "Agent Name Text"; // <- create this in Airtable (Lookup)
+
 const FIELD_INCENTIVE = "Incentive";
 const FIELD_SUBMITTED_BY = "Submitted By";
 const FIELD_APPROVAL_STATUS = "Approval Status";
@@ -70,7 +74,22 @@ const STATUS_PENDING = "Pending";
 const STATUS_APPROVED = "Approved";
 const STATUS_DENIED = "Denied";
 
-// ===== Airtable helpers =====
+// ===== Helpers =====
+function safe(val) {
+  if (val === undefined || val === null || val === "") return "—";
+  return String(val);
+}
+
+// Airtable Lookup fields often return arrays. Convert nicely.
+function normalizeMaybeArray(val) {
+  if (Array.isArray(val)) {
+    const cleaned = val.map(v => String(v || "").trim()).filter(Boolean);
+    return cleaned.length ? cleaned.join(", ") : "—";
+  }
+  return safe(val);
+}
+
+// ===== Airtable API helpers =====
 const AIRTABLE_API = "https://api.airtable.com/v0";
 
 async function airtableFetch(path, options = {}) {
@@ -114,27 +133,23 @@ client.once("ready", () => {
 });
 
 // ===== Embed + Buttons =====
-function safe(val) {
-  if (val === undefined || val === null || val === "") return "—";
-  return String(val);
-}
-
 function buildEmbed(fields) {
+  const agentName = normalizeMaybeArray(fields[FIELD_AGENT_NAME_TEXT]);
   const date = safe(fields[FIELD_DATE]);
-  const agentName = safe(fields[FIELD_AGENT_NAME]);
   const incentive = safe(fields[FIELD_INCENTIVE]);
   const submittedBy = safe(fields[FIELD_SUBMITTED_BY]);
 
   const description = [
-    `**${agentName}**`,
+    `**👤 Agent Name**`,
+    `${agentName}`,
     ``,
-    `**Date**`,
+    `**📅 Date**`,
     `${date}`,
     ``,
-    `**Incentive**`,
-    `${String(incentive).slice(0, 1200)}`,
+    `**🎁 Incentive**`,
+    `${String(incentive).slice(0, 1200) || "—"}`,
     ``,
-    `**Submitted By**`,
+    `**✍️ Submitted By**`,
     `${submittedBy}`
   ].join("\n");
 
@@ -159,6 +174,14 @@ function buildButtons(recordId) {
 
 // ===== Routes =====
 app.get("/", (req, res) => res.status(200).send("OK"));
+
+// Optional: quick route to confirm server is running
+app.get("/routes", (req, res) => {
+  res.json({
+    ok: true,
+    routes: ["GET /", "POST /send-incentive", "GET /routes"]
+  });
+});
 
 // Airtable automation calls this
 app.post("/send-incentive", async (req, res) => {
