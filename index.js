@@ -5,7 +5,7 @@
  * ✅ Posts Discord embed with buttons Approve / Deny
  * ✅ Updates Airtable "Approval Status" to Pending/Approved/Denied
  * ✅ Uses Lookup field "Agent Name Text" to display linked Agent Name
- * ✅ NEVER displays recordId in the embed
+ * ✅ On Approve/Deny: removes buttons + posts a follow-up status message
  * ✅ GET /version for deploy verification
  ******************************************************/
 
@@ -20,7 +20,7 @@ const {
   EmbedBuilder
 } = require("discord.js");
 
-const APP_VERSION = "incentive-only-v3-no-recordid-agent-lookup";
+const APP_VERSION = "incentive-only-v4-followup-message";
 
 const app = express();
 app.use(express.json());
@@ -81,6 +81,12 @@ function normalizeMaybeArray(val) {
   return safe(val);
 }
 
+function shorten(text, max = 120) {
+  const s = String(text ?? "").trim();
+  if (!s) return "—";
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+
 // ===== Airtable helpers =====
 const AIRTABLE_API = "https://api.airtable.com/v0";
 
@@ -127,7 +133,6 @@ client.once("ready", () => {
 
 // ===== Embed + Buttons =====
 function buildEmbed(fields) {
-  // IMPORTANT: We intentionally DO NOT use recordId anywhere here.
   const agentName = normalizeMaybeArray(fields[FIELD_AGENT_NAME_TEXT]);
   const date = safe(fields[FIELD_DATE]);
   const incentive = safe(fields[FIELD_INCENTIVE]);
@@ -166,9 +171,21 @@ function buildButtons(recordId) {
   );
 }
 
+async function postFollowUp(channel, fields, verdict, actorTag) {
+  const agentName = normalizeMaybeArray(fields[FIELD_AGENT_NAME_TEXT]);
+  const incentive = safe(fields[FIELD_INCENTIVE]);
+
+  const emoji = verdict === STATUS_APPROVED ? "✅" : "❌";
+  const verb = verdict === STATUS_APPROVED ? "Approved" : "Denied";
+
+  // Keep it short + readable
+  const msg = `${emoji} **${verb}** — **${agentName}** — ${shorten(incentive, 120)}\n👤 By: **${actorTag}**`;
+
+  await channel.send({ content: msg });
+}
+
 // ===== Routes =====
 app.get("/", (req, res) => res.status(200).send("OK"));
-
 app.get("/version", (req, res) => res.status(200).send(APP_VERSION));
 
 // Airtable automation calls this
@@ -222,15 +239,21 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.editReply(`This request is already **${status}**.`);
     }
 
+    // Find the channel to post follow-up into
+    const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
+
     if (isDeny) {
       await patchRecord(recordId, { [FIELD_APPROVAL_STATUS]: STATUS_DENIED }).catch(() => {});
       await interaction.message.edit({ components: [] }).catch(() => {});
-      return interaction.editReply("❌ Denied. Airtable updated and buttons removed.");
+      await postFollowUp(channel, fields, STATUS_DENIED, interaction.user.tag).catch(() => {});
+      return interaction.editReply("❌ Denied. Airtable updated, buttons removed, follow-up posted.");
     }
 
+    // Approve
     await patchRecord(recordId, { [FIELD_APPROVAL_STATUS]: STATUS_APPROVED }).catch(() => {});
     await interaction.message.edit({ components: [] }).catch(() => {});
-    return interaction.editReply("✅ Approved. Airtable updated and buttons removed.");
+    await postFollowUp(channel, fields, STATUS_APPROVED, interaction.user.tag).catch(() => {});
+    return interaction.editReply("✅ Approved. Airtable updated, buttons removed, follow-up posted.");
   } catch (err) {
     console.error(err);
     if (interaction.deferred || interaction.replied) {
