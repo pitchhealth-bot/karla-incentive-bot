@@ -1,19 +1,12 @@
 /******************************************************
  * KARLA INCENTIVE BOT — Airtable + Render + Discord
  *
- * ✅ Airtable automation -> POST /send-incentive { recordId }
- * ✅ Bot posts embed with buttons: Approve / Deny
- * ✅ Clicking buttons updates Airtable field "Approval Status"
- * ✅ Uses Lookup field "Agent Name Text" to display name
- *
- * Env Vars (Render):
- *  DISCORD_BOT_TOKEN
- *  DISCORD_CHANNEL_ID
- *  AIRTABLE_TOKEN
- *  AIRTABLE_BASE_ID
- *  AIRTABLE_TABLE_NAME
- *  WEBHOOK_SECRET
- *  PORT (optional)
+ * ✅ POST /send-incentive { recordId } from Airtable automation
+ * ✅ Posts Discord embed with buttons Approve / Deny
+ * ✅ Updates Airtable "Approval Status" to Pending/Approved/Denied
+ * ✅ Uses Lookup field "Agent Name Text" to display linked Agent Name
+ * ✅ NEVER displays recordId in the embed
+ * ✅ GET /version for deploy verification
  ******************************************************/
 
 const express = require("express");
@@ -26,6 +19,8 @@ const {
   ButtonStyle,
   EmbedBuilder
 } = require("discord.js");
+
+const APP_VERSION = "incentive-only-v3-no-recordid-agent-lookup";
 
 const app = express();
 app.use(express.json());
@@ -59,12 +54,9 @@ reqEnv("AIRTABLE_BASE_ID");
 reqEnv("AIRTABLE_TABLE_NAME");
 reqEnv("WEBHOOK_SECRET");
 
-// ===== Airtable field names (MUST match your table) =====
+// ===== Airtable field names (MUST match your Incentive Approval table) =====
 const FIELD_DATE = "Date";
-
-// IMPORTANT: Agent Name is a linked record, so we use a LOOKUP field:
-const FIELD_AGENT_NAME_TEXT = "Agent Name Text"; // <- create this in Airtable (Lookup)
-
+const FIELD_AGENT_NAME_TEXT = "Agent Name Text"; // Lookup field you create in Airtable
 const FIELD_INCENTIVE = "Incentive";
 const FIELD_SUBMITTED_BY = "Submitted By";
 const FIELD_APPROVAL_STATUS = "Approval Status";
@@ -76,11 +68,11 @@ const STATUS_DENIED = "Denied";
 
 // ===== Helpers =====
 function safe(val) {
-  if (val === undefined || val === null || val === "") return "—";
-  return String(val);
+  if (val === undefined || val === null) return "—";
+  const s = String(val).trim();
+  return s ? s : "—";
 }
 
-// Airtable Lookup fields often return arrays. Convert nicely.
 function normalizeMaybeArray(val) {
   if (Array.isArray(val)) {
     const cleaned = val.map(v => String(v || "").trim()).filter(Boolean);
@@ -89,7 +81,7 @@ function normalizeMaybeArray(val) {
   return safe(val);
 }
 
-// ===== Airtable API helpers =====
+// ===== Airtable helpers =====
 const AIRTABLE_API = "https://api.airtable.com/v0";
 
 async function airtableFetch(path, options = {}) {
@@ -130,10 +122,12 @@ const client = new Client({
 
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`✅ Version: ${APP_VERSION}`);
 });
 
 // ===== Embed + Buttons =====
 function buildEmbed(fields) {
+  // IMPORTANT: We intentionally DO NOT use recordId anywhere here.
   const agentName = normalizeMaybeArray(fields[FIELD_AGENT_NAME_TEXT]);
   const date = safe(fields[FIELD_DATE]);
   const incentive = safe(fields[FIELD_INCENTIVE]);
@@ -175,13 +169,7 @@ function buildButtons(recordId) {
 // ===== Routes =====
 app.get("/", (req, res) => res.status(200).send("OK"));
 
-// Optional: quick route to confirm server is running
-app.get("/routes", (req, res) => {
-  res.json({
-    ok: true,
-    routes: ["GET /", "POST /send-incentive", "GET /routes"]
-  });
-});
+app.get("/version", (req, res) => res.status(200).send(APP_VERSION));
 
 // Airtable automation calls this
 app.post("/send-incentive", async (req, res) => {
@@ -230,7 +218,6 @@ client.on("interactionCreate", async (interaction) => {
     const fields = record.fields || {};
     const status = fields[FIELD_APPROVAL_STATUS];
 
-    // Stop double-processing
     if (status === STATUS_APPROVED || status === STATUS_DENIED) {
       return interaction.editReply(`This request is already **${status}**.`);
     }
@@ -241,7 +228,6 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.editReply("❌ Denied. Airtable updated and buttons removed.");
     }
 
-    // Approve
     await patchRecord(recordId, { [FIELD_APPROVAL_STATUS]: STATUS_APPROVED }).catch(() => {});
     await interaction.message.edit({ components: [] }).catch(() => {});
     return interaction.editReply("✅ Approved. Airtable updated and buttons removed.");
